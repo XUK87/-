@@ -119,21 +119,25 @@ function renderJoin(s){
   $("#phase").innerHTML = "";
   $("#app").innerHTML = `<div class="center card stack">
     <div><b style="color:var(--gold2);font-size:18px">加入游戏</b><div class="fac">10人局 · 程序担任法官</div></div>
-    ${s.started ? `<div class="err">游戏已经开始，无法加入。</div>` :
-      s.full ? `<div class="err">房间已满。</div>` : `
-      <div class="row"><input type="text" id="name" maxlength="12" placeholder="输入你的昵称"><button class="btn primary" id="joinBtn">加入</button></div>
-      <div class="fac">当前已有 ${s.count} / 10 人</div>`}
+    <input type="text" id="name" maxlength="12" placeholder="输入你的昵称" style="width:100%">
+    <div class="row">
+      ${s.started || s.full ? "" : `<button class="btn primary" id="joinBtn">入座参战</button>`}
+      <button class="btn" id="watchBtn">👀 旁观</button></div>
+    <div class="fac">${s.started ? "本局已经开始，你可以旁观（看不到任何人的身份），本局结束后可入座。" :
+      s.full ? "座位已满，你可以先旁观。" : `当前已有 ${s.count} / 10 人`}</div>
   </div>`;
-  const go = async () => { const j = await post("/api/join", {name: $("#name").value}); if(j.token){ token = j.token; store.set("mafia_token", token); poll(true); } };
-  if($("#joinBtn")){ $("#joinBtn").onclick = go; $("#name").onkeydown = e => { if(e.key==="Enter") go(); }; $("#name").focus(); }
+  const go = async (spectate) => { const j = await post("/api/join", {name: $("#name").value, spectate}); if(j.token){ token = j.token; store.set("mafia_token", token); poll(true); } };
+  if($("#joinBtn")) $("#joinBtn").onclick = () => go(false);
+  $("#watchBtn").onclick = () => go(true);
+  $("#name").onkeydown = e => { if(e.key==="Enter") go(!$("#joinBtn")); }; $("#name").focus();
 }
 
 function renderLobby(s){
   layoutBuilt = null;
-  $("#phase").innerHTML = `<b>等待玩家加入</b><div class="info">${s.seats.length} / 10 人 · 你是 ${s.me.num}号 ${esc(s.me.name)}</div>`;
+  $("#phase").innerHTML = `<b>等待玩家加入</b><div class="info">${s.seats.length} / 10 人 · ${s.spectator ? "你正在旁观（" + esc(s.me.name) + "）" : `你是 ${s.me.num}号 ${esc(s.me.name)}`}</div>`;
   const seats = Array.from({length:10}, (_,i) => {
     const p = s.seats[i];
-    return `<div class="seat ${p && p.num===s.me.num ? "me":""}"><span class="n">${i+1}号</span>${p ? esc(p.name) + (p.host?" 👑":"") + (p.bot?" 🤖":"") : '<span class="fac">空位</span>'}</div>`;
+    return `<div class="seat ${p && !s.spectator && p.num===s.me.num ? "me":""}"><span class="n">${i+1}号</span>${p ? esc(p.name) + (p.host?" 👑":"") + (p.bot?" 🤖":"") : '<span class="fac">空位</span>'}</div>`;
   }).join("");
   const hostCtl = s.host ? `
     <div class="stack" style="margin-top:16px">
@@ -142,30 +146,36 @@ function renderLobby(s){
         <label><input type="radio" name="mode" value="city"> 屠城</label></div>
       <label class="fac"><input type="checkbox" id="bots"> 用机器人补满空位（自己试玩/测试用）</label>
       <button class="btn primary" id="startBtn">开始游戏</button>
-    </div>` : `<p class="fac" style="margin-top:16px">等待房主 👑 开始游戏…</p>`;
+    </div>` : s.spectator ? `<div style="margin-top:16px">${s.full ? '<span class="fac">座位已满</span>' : '<button class="btn primary" id="sitBtn">入座参战</button>'}</div>`
+    : `<p class="fac" style="margin-top:16px">等待房主 👑 开始游戏…</p>`;
   const keep = $("#bots")?.checked, keepMode = document.querySelector("input[name=mode]:checked")?.value;
   $("#app").innerHTML = `<div class="center card" style="max-width:560px">
       <h3>座位</h3><div class="seats">${seats}</div>${hostCtl}
-      <div style="margin-top:12px"><button class="btn" id="leaveBtn">离开座位</button></div>
+      ${s.spectators.length ? `<p class="fac" style="margin-top:12px">👀 旁观：${s.spectators.map(esc).join("、")}</p>` : ""}
+      <div style="margin-top:12px"><button class="btn" id="leaveBtn">${s.spectator ? "离开" : "离开座位"}</button></div>
       <p class="fac" style="margin-top:12px">提示：建议大家同时开着语音通话（白天发言用），并点右上角开启语音播报。</p></div>`;
   if($("#bots") && keep) $("#bots").checked = true;
   if(keepMode) { const r = document.querySelector(`input[name=mode][value=${keepMode}]`); if(r) r.checked = true; }
   if($("#startBtn")) $("#startBtn").onclick = () => post("/api/start", {mode: document.querySelector("input[name=mode]:checked").value, bots: $("#bots").checked}).then(()=>poll(true));
+  if($("#sitBtn")) $("#sitBtn").onclick = () => post("/api/sit", {}).then(()=>poll(true));
   $("#leaveBtn").onclick = async () => { const j = await post("/api/leave", {}); if(j.ok){ token=""; store.del("mafia_token"); poll(true); } };
 }
 
 // ── 游戏 ──
 function buildGame(){
   $("#app").innerHTML = `<main>
-    <div class="stack"><div class="card"><h3>座位 <span class="badge" id="mode"></span></h3><div class="seats" id="seats"></div></div>
-      <div id="extra"></div></div>
+    <div class="stack"><div class="card"><h3>座位 <span class="badge" id="mode"></span></h3><div class="seats" id="seats"></div>
+        <div class="fac" id="watchers" style="margin-top:8px"></div></div>
+      <div id="extra"></div>
+      <div class="player-only" id="endWrap"><button class="btn danger" id="endBtn" style="width:100%">⛔ 强制结束游戏</button></div></div>
     <div class="stack"><div class="card action" id="action"></div><div id="team"></div><div id="result"></div></div>
     <div class="stack">
-      <div class="card"><h3>我的身份 <button class="btn" id="hideBtn" style="padding:2px 10px;font-size:12px;float:right"></button></h3><div id="role"></div></div>
-      <div class="card"><h3>我的私密信息</h3><div class="list" id="priv"></div></div>
+      <div class="card player-only"><h3>我的身份 <button class="btn" id="hideBtn" style="padding:2px 10px;font-size:12px;float:right"></button></h3><div id="role"></div></div>
+      <div class="card player-only"><h3>我的私密信息</h3><div class="list" id="priv"></div></div>
       <div class="card"><h3>法官播报</h3><div class="list" id="ann"></div></div>
     </div></main>`;
   $("#hideBtn").onclick = () => { roleHidden = !roleHidden; store.set("mafia_hide", roleHidden?"1":"0"); renderRole(window._s); };
+  $("#endBtn").onclick = () => { if(confirm("确定强制结束本局游戏？所有人的身份将被公布。")) post("/api/end", {}).then(()=>poll(true)); };
   layoutBuilt = "game"; reqKey = null; lastChatLen = -1;
 }
 
@@ -252,7 +262,7 @@ function renderResult(s){
     ${R.roles.map(p => `<tr><td>${p.num}号</td><td>${esc(p.name)}</td><td>${esc(p.role)}</td><td>${esc(p.camp)}</td><td>${p.alive?"存活":"出局"}</td></tr>`).join("")}</table>
     ${R.lovers ? `<p class="fac">罗密欧与朱丽叶：${R.lovers[0]}号 & ${R.lovers[1]}号</p>` : ""}
     <h3 style="margin-top:12px">复盘记录</h3><div class="list" style="max-height:400px">${R.log.map(l=>`<div>${esc(l)}</div>`).join("")}</div>
-    ${s.host ? `<div style="margin-top:12px"><button class="btn primary" id="againBtn">回到大厅，再来一局</button></div>` : ""}</div>`;
+    ${s.spectator ? "" : `<div style="margin-top:12px"><button class="btn primary" id="againBtn">回到大厅，再来一局</button></div>`}</div>`;
   if($("#againBtn")) $("#againBtn").onclick = () => post("/api/restart", {}).then(()=>poll(true));
 }
 
@@ -262,11 +272,19 @@ function renderGame(s){
   $("#phase").innerHTML = `<b>${esc(s.phase.title)}</b><div class="info">${esc(s.phase.info)}</div>`;
   deadline = s.phase.remaining == null ? null : Date.now() + s.phase.remaining*1000;
   $("#mode").textContent = s.mode;
-  $("#seats").innerHTML = s.seats.map(p => `<div class="seat ${p.out?"out":""} ${p.num===s.me.num?"me":""} ${p.speaking?"speaking":""}">
+  const spec = !!s.spectator;
+  document.querySelectorAll(".player-only").forEach(e => e.style.display = spec ? "none" : "");
+  $("#endWrap").style.display = spec || s.ended ? "none" : "";
+  $("#watchers").textContent = s.spectators.length ? "👀 旁观：" + s.spectators.join("、") : "";
+  $("#seats").innerHTML = s.seats.map(p => `<div class="seat ${p.out?"out":""} ${!spec && p.num===s.me.num?"me":""} ${p.speaking?"speaking":""}">
      <span class="n">${p.num}号</span>${esc(p.name)}${p.bot?" 🤖":""}
      <span class="tag">${p.out ? "出局" : p.speaking ? "🎤 发言中" : "在场"}${p.muted ? ' · <span class="muted-tag">🤐 禁言</span>' : ""}</span></div>`).join("");
-  renderRole(s); renderAction(s); renderTeam(s); renderExtra(s); renderResult(s);
-  $("#priv").innerHTML = s.privates.length ? s.privates.map(p => `<div><span class="t">${esc(p.t)}</span>${esc(p.text)}</div>`).join("") : '<span class="fac">暂无</span>';
+  if(spec){
+    $("#action").innerHTML = `<div class="wait"><div class="moon">👀</div><div>你正在旁观（${esc(s.me.name)}），看不到任何人的身份与夜间行动。</div>
+      <div class="fac" style="margin-top:6px">${esc(s.phase.info || "")}</div></div>`;
+    reqKey = null; renderResult(s);
+  } else { renderRole(s); renderAction(s); renderTeam(s); renderExtra(s); renderResult(s); }
+  if(!spec) $("#priv").innerHTML = s.privates.length ? s.privates.map(p => `<div><span class="t">${esc(p.t)}</span>${esc(p.text)}</div>`).join("") : '<span class="fac">暂无</span>';
   $("#ann").innerHTML = s.announcements.slice().reverse().map(a => `<div>${esc(a.text)}</div>`).join("");
   if(lastAnn === null) lastAnn = s.announcements.length - 1;
   for(const a of s.announcements) if(a.id > lastAnn){ speak(a.text); lastAnn = a.id; }

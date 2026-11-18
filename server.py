@@ -207,6 +207,8 @@ class Game:
             time.sleep(min(1.2 + len(text) * 0.24, 9))
 
     def set_phase(self, title, info=""):
+        if self.aborted:
+            raise GameOver()
         with self.cond:
             self.phase_title, self.phase_info = title, info
             self.cond.notify_all()
@@ -587,6 +589,9 @@ class Game:
         t = [p for p in alive if self.camp(p) == "third"]
         if self.third and t and not m and not g:
             return "third"
+        # 场上最后只剩一个三方和一个平民 → 三方胜利
+        if self.third and len(alive) == 2 and len(t) == 1 and len(g) == 1 and g[0].role in VILLAGER_ROLES:
+            return "third"
         if not m and not t:
             return "good"
         if not t:
@@ -711,12 +716,9 @@ class Game:
         else:
             self.announce(f"法官判罚：对{p.num}号的判罚无效。")
 
-    def vote(self):
-        self.set_phase(f"第{self.day}天 · 放逐公投", "请投票")
-        self.announce("发言结束，现在开始放逐公投，请大家投票。")
-        voters = self.table()
-        opts = [(str(p.num), self.label(p)) for p in voters] + [("0", "弃票")]
-        res = self.request({p.num: spec("放逐公投", "请选择你要放逐的玩家。", opts) for p in voters}, VOTE_T)
+    def collect_votes(self, voters, cands, allow_abstain, title, text):
+        opts = [(str(p.num), self.label(p)) for p in cands] + ([("0", "弃票")] if allow_abstain else [])
+        res = self.request({p.num: spec(title, text, opts) for p in voters}, VOTE_T)
         tally = {}
         for v, choice in res.items():
             if choice and choice != "0":
@@ -725,13 +727,49 @@ class Game:
                  for t, vs in sorted(tally.items(), key=lambda kv: -len(kv[1]))]
         abst = sorted(v for v, c in res.items() if not c or c == "0")
         if abst:
-            lines.append("弃票：" + "、".join(map(str, abst)) + "号")
-        self.note("投票：" + "；".join(lines))
-        top = max((len(v) for v in tally.values()), default=0)
-        leaders = [t for t, vs in tally.items() if len(vs) == top]
-        ex = self.P[leaders[0]] if top and len(leaders) == 1 else None
-        self.announce("投票结果：" + "；".join(lines) + "。" +
-                      (f"{ex.num}号得票最多。" if ex else "平票，无人被放逐。"))
+            lines.append("弃票/未投：" + "、".join(map(str, abst)) + "号")
+        self.note(f"{title}：" + "；".join(lines))
+        return tally, lines
+
+    def vote(self):
+        self.set_phase(f"第{self.day}天 · 放逐公投", "请投票")
+        self.announce("发言结束，现在开始放逐公投，请大家投票。")
+        voters = cands = self.table()
+        tally, lines = self.collect_votes(voters, cands, True, "放逐公投", "请选择你要放逐的玩家。")
+        first, empty_rounds, rnd = True, 0, 0
+        while True:
+            top = max((len(v) for v in tally.values()), default=0)
+            leaders = sorted(t for t, vs in tally.items() if len(vs) == top)
+            if top and len(leaders) == 1:
+                ex = self.P[leaders[0]]
+                self.announce("投票结果：" + "；".join(lines) + f"。{ex.num}号得票最多。")
+                break
+            if first and not top:
+                ex = None
+                self.announce("投票结果：全体弃票，本轮无人被放逐。")
+                break
+            if not top:  # PK 轮无人投票（全部超时）
+                empty_rounds += 1
+                if empty_rounds >= 2:
+                    ex = random.choice(cands)
+                    self.announce(f"连续两轮PK无人投票，法官在平票玩家中随机放逐：{ex.num}号。")
+                    self.note(f"PK 连续无人投票，随机放逐 {self.desc(ex)}")
+                    break
+                leaders = [p.num for p in cands]
+            first = False
+            rnd += 1
+            cands = [self.P[n] for n in leaders]
+            names = "、".join(f"{p.num}号" for p in cands)
+            self.announce(("投票结果：" + "；".join(lines) + "。" if lines else "") +
+                          f"{names}平票，进入第{rnd}轮PK。请平票玩家再发言一轮。")
+            for p in cands:
+                if p.on_table:
+                    self.speech(p, "PK发言")
+            voters = [p for p in self.table() if p not in cands] or self.table()
+            self.set_phase(f"第{self.day}天 · PK投票", f"在 {names} 中投票")
+            self.announce(f"PK发言结束，请在{names}中投票。")
+            tally, lines = self.collect_votes(voters, cands, False, f"第{rnd}轮PK投票",
+                                              f"平票玩家：{names}。请选择你要放逐的玩家。")
 
         # 技能窗口：所有在场玩家看到相同的窗口，固定时长，避免暴露 Stevie
         stevie = self.by_role(STEVIE)
@@ -789,13 +827,37 @@ class Game:
         self.set_phase("游戏结束", f"{names[w]}获胜")
         with self.cond:
             self.ended = True
-            self.result = {"winner": f"{names[w]}获胜", "roles": self.roles_table(), "log": self.log,
+            self.result = {"winner": f"{names[w]}获胜", "roles": self.roles_table(), "log": list(self.log),
                            "lovers": list(self.lovers) if self.lovers else None, "achievement": ach}
         self.announce(f"游戏结束，{names[w]}获胜！")
         if ach:
             self.announce(ach)
 
+    def force_end(self, num):
+        """玩家强制结束游戏（调用时已持有锁）"""
+        p = self.P[num]
+        self.note(f"{p.num}号{p.name} 强制结束了游戏")
+        self.aborted = self.ended = True
+        self.requests, self.bot_due, self.deadline, self.speaker, self.team = {}, {}, None, None, None
+        self.in_discussion = False
+        self.phase_title, self.phase_info = "游戏结束", f"{p.num}号 {p.name} 强制结束了游戏"
+        self.ann.append({"id": len(self.ann), "text": f"{p.num}号{p.name}强制结束了游戏。"})
+        self.result = {"winner": "游戏被强制结束（无胜负）", "roles": self.roles_table(), "log": list(self.log),
+                       "lovers": list(self.lovers) if self.lovers else None, "achievement": None}
+
     # ───── 客户端视图 ─────
+    def public_view(self):
+        return {
+            "seats": [{"num": p.num, "name": p.name, "out": not p.on_table, "speaking": self.speaker == p.num,
+                       "muted": self.muted(p), "bot": self.is_bot(p.num)} for p in self.P.values()],
+            "phase": {"title": self.phase_title, "info": self.phase_info,
+                      "remaining": max(0, round(self.deadline - time.time())) if self.deadline else None},
+            "mode": "屠边" if self.mode == "edge" else "屠城",
+            "announcements": self.ann,
+            "ended": self.ended,
+            "result": self.result,
+        }
+
     def view(self, num):
         me = self.P[num]
         req = self.requests.get(num)
@@ -814,21 +876,14 @@ class Game:
         can_explode = (self.in_discussion and not self.interrupt and me.role == LUCIANO and me.on_table
                        and sonny.on_table and chichi.on_table)
         return {
+            **self.public_view(),
             "me": {"num": num, "name": me.name, "role": me.role, "faction": ROLE_FACTION[me.role],
                    "desc": ROLE_DESC[me.role], "out": not me.on_table},
-            "seats": [{"num": p.num, "name": p.name, "out": not p.on_table, "speaking": self.speaker == p.num,
-                       "muted": self.muted(p), "bot": self.is_bot(p.num)} for p in self.P.values()],
-            "phase": {"title": self.phase_title, "info": self.phase_info,
-                      "remaining": max(0, round(self.deadline - time.time())) if self.deadline else None},
-            "mode": "屠边" if self.mode == "edge" else "屠城",
-            "announcements": self.ann,
             "privates": self.privates[num],
             "request": req,
             "team": team,
             "can_explode": can_explode,
             "can_report": self.in_discussion and not self.interrupt and me.on_table,
-            "ended": self.ended,
-            "result": self.result,
         }
 
 
@@ -837,8 +892,16 @@ class Room:
     def __init__(self, fast=False):
         self.cond = threading.Condition()
         self.seats = []
+        self.spectators = []
         self.game = None
         self.fast = fast
+
+    def spec_of(self, token):
+        for s in self.spectators:
+            if s["token"] == token and token:
+                s["seen"] = time.time()
+                return s
+        return None
 
     def seat_of(self, token):
         for s in self.seats:
@@ -854,6 +917,7 @@ class Room:
             time.sleep(5)
             with self.cond:
                 now = time.time()
+                self.spectators = [s for s in self.spectators if now - s["seen"] < 60]
                 humans = [s for s in self.seats if not s["bot"]]
                 if self.game is None:
                     stale = [s for s in humans if now - s.get("seen", now) > 20]
@@ -913,16 +977,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def state(self, token):
         seat = ROOM.seat_of(token)
+        watcher = None if seat else ROOM.spec_of(token)
+        specs = [s["name"] for s in ROOM.spectators]
+        if watcher:
+            if ROOM.game is None:
+                return {"joined": True, "spectator": True, "started": False, "spectators": specs,
+                        "me": {"name": watcher["name"]}, "full": len(ROOM.seats) >= N_PLAYERS,
+                        "seats": [{"num": s["num"], "name": s["name"], "host": s["host"], "bot": s["bot"]}
+                                  for s in ROOM.seats]}
+            v = ROOM.game.public_view()
+            v.update(joined=True, spectator=True, started=True, spectators=specs, me={"name": watcher["name"]})
+            return v
         if not seat:
             return {"joined": False, "started": ROOM.game is not None,
                     "count": len(ROOM.seats), "full": len(ROOM.seats) >= N_PLAYERS}
         if ROOM.game is None:
             return {"joined": True, "started": False, "me": {"num": seat["num"], "name": seat["name"]},
-                    "host": seat["host"],
+                    "host": seat["host"], "spectators": specs,
                     "seats": [{"num": s["num"], "name": s["name"], "host": s["host"], "bot": s["bot"]}
                               for s in ROOM.seats]}
         v = ROOM.game.view(seat["num"])
-        v.update(joined=True, started=True, host=seat["host"])
+        v.update(joined=True, started=True, host=seat["host"], spectators=specs)
         return v
 
     def do_POST(self):
@@ -944,6 +1019,12 @@ class Handler(BaseHTTPRequestHandler):
             name = str(b.get("name", "")).strip()[:12]
             if not name:
                 raise ValueError("请输入昵称")
+            if any(s["name"] == name for s in ROOM.seats + ROOM.spectators):
+                raise ValueError("昵称已被使用")
+            if b.get("spectate") or ROOM.game is not None or len(ROOM.seats) >= N_PLAYERS:
+                token = secrets.token_urlsafe(16)
+                ROOM.spectators.append({"name": name, "token": token, "seen": time.time()})
+                return {"token": token, "spectator": True}
             if ROOM.game is not None:
                 raise ValueError("游戏已经开始")
             if len(ROOM.seats) >= N_PLAYERS:
@@ -954,6 +1035,23 @@ class Handler(BaseHTTPRequestHandler):
             ROOM.seats.append({"num": len(ROOM.seats) + 1, "name": name, "token": token, "seen": time.time(),
                                "host": not any(s["host"] for s in ROOM.seats), "bot": False})
             return {"token": token}
+
+        watcher = ROOM.spec_of(b.get("token", ""))
+        if watcher:
+            if path == "/api/sit":   # 旁观者在大厅入座
+                if ROOM.game is not None:
+                    raise ValueError("游戏进行中，请等本局结束")
+                if len(ROOM.seats) >= N_PLAYERS:
+                    raise ValueError("座位已满")
+                ROOM.spectators.remove(watcher)
+                ROOM.seats.append({"num": len(ROOM.seats) + 1, "name": watcher["name"], "token": watcher["token"],
+                                   "seen": time.time(), "host": not ROOM.seats, "bot": False})
+                ROOM.renumber()
+                return {"ok": True}
+            if path == "/api/leave":
+                ROOM.spectators.remove(watcher)
+                return {"ok": True}
+            raise ValueError("旁观者不能进行此操作")
 
         seat = ROOM.seat_of(b.get("token", ""))
         if not seat:
@@ -1026,9 +1124,15 @@ class Handler(BaseHTTPRequestHandler):
             g.interrupt = ("report", (num, t))
             return {"ok": True}
 
+        if path == "/api/end":
+            if g.ended:
+                raise ValueError("游戏已经结束")
+            g.force_end(num)
+            return {"ok": True}
+
         if path == "/api/restart":
-            if not seat["host"] or not g.ended:
-                raise ValueError("只有房主可以在游戏结束后重开")
+            if not g.ended:
+                raise ValueError("游戏结束后才能回到大厅")
             ROOM.game = None
             ROOM.seats = [s for s in ROOM.seats if not s["bot"]]
             ROOM.renumber()
