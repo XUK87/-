@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: mafia-night
+    runtime: python
+    plan: free
+    buildCommand: "echo no dependencies"
+    startCommand: "python server.py"

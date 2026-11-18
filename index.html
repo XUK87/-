@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>黑手党之夜</title>
+<style>
+:root{
+  --bg:#17120f; --panel:#241c17; --panel2:#2e241d; --line:#4a3a2c;
+  --gold:#d4ad62; --gold2:#f0d79a; --text:#efe6da; --dim:#a8998a;
+  --red:#d0625a; --green:#7fb77e; --blue:#7ea6d6; --purple:#b28bd6;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.band{height:10px;background:repeating-linear-gradient(45deg,#6b4f36 0 7px,#3a2b20 7px 14px)}
+header{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+h1{margin:0;font-size:20px;color:var(--gold2);letter-spacing:2px;font-family:"Songti SC",serif}
+.phase{flex:1;min-width:220px}
+.phase b{color:var(--gold2);font-size:17px}
+.phase .info{color:var(--dim);font-size:13px}
+.timer{font-variant-numeric:tabular-nums;color:var(--gold);font-weight:700;font-size:18px;min-width:52px;text-align:right}
+.btn{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font:inherit;cursor:pointer}
+.btn:hover{border-color:var(--gold)}
+.btn.primary{background:var(--gold);color:#22180f;border-color:var(--gold);font-weight:700}
+.btn.danger{border-color:var(--red);color:var(--red)}
+.btn.sel{background:#4b3a22;border-color:var(--gold2);color:var(--gold2)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.badge{font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:99px;color:var(--dim)}
+main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:260px 1fr 320px}
+@media(max-width:980px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h3{margin:0 0 10px;font-size:14px;color:var(--gold);letter-spacing:1px;font-weight:600}
+.seats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.seat{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px;position:relative}
+.seat .n{color:var(--gold);font-weight:700;margin-right:4px}
+.seat.out{opacity:.4;text-decoration:line-through}
+.seat.me{border-color:var(--gold)}
+.seat.speaking{box-shadow:0 0 0 2px var(--green)}
+.seat .tag{font-size:11px;color:var(--dim);display:block}
+.role{font-family:"Songti SC",serif;font-size:26px;color:var(--gold2);margin:4px 0}
+.fac{color:var(--dim);font-size:12px}
+.role-desc{margin:8px 0 0;padding-left:18px;font-size:13px;color:#d9cdbf}
+.role-desc li{margin-bottom:6px}
+.hidden-role{filter:blur(8px);user-select:none}
+.action{border-color:var(--gold);background:linear-gradient(180deg,#33271c,#241c17)}
+.action .t{font-size:18px;color:var(--gold2);font-weight:700}
+.action .x{white-space:pre-wrap;margin:6px 0 12px;color:#e5d9c9}
+.opts{display:flex;flex-wrap:wrap;gap:8px}
+.wait{color:var(--dim);text-align:center;padding:26px 8px}
+.wait .moon{font-size:34px}
+.list{max-height:320px;overflow:auto;font-size:13px;display:flex;flex-direction:column;gap:6px}
+.list div{padding:6px 8px;background:var(--panel2);border-radius:6px}
+.list .t{color:var(--gold);font-size:11px;margin-right:6px}
+.team{border-color:var(--red)}
+.team h3{color:var(--red)}
+.chatrow{display:flex;gap:6px;margin-top:8px}
+input[type=text]{flex:1;background:#120e0b;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font:inherit;min-width:0}
+.center{max-width:440px;margin:60px auto;padding:0 16px}
+.err{color:var(--red);font-size:13px;min-height:20px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:6px;border-bottom:1px solid var(--line);text-align:left}
+.win{font-size:24px;color:var(--gold2);font-family:"Songti SC",serif;text-align:center;margin:8px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.stack>*+*{margin-top:16px}
+.muted-tag{color:var(--purple)}
+</style>
+</head>
+<body>
+<div class="band"></div>
+<header>
+  <h1>黑手党之夜</h1>
+  <div class="phase" id="phase"></div>
+  <div class="timer" id="timer"></div>
+  <button class="btn" id="voiceBtn">🔇 语音关</button>
+</header>
+<div id="app"></div>
+<div id="toast" class="err" style="position:fixed;bottom:12px;left:16px;right:16px;text-align:center"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const store = {
+  get(k){ try{return localStorage.getItem(k)}catch(e){return null} },
+  set(k,v){ try{localStorage.setItem(k,v)}catch(e){} },
+  del(k){ try{localStorage.removeItem(k)}catch(e){} },
+};
+let token = store.get("mafia_token") || "";
+let voiceOn = store.get("mafia_voice") === "1";
+let lastAnn = null, deadline = null, reqKey = null, multiSel = [], roleHidden = store.get("mafia_hide") === "1";
+let layoutBuilt = null, lastChatLen = -1;
+
+function toast(m){ $("#toast").textContent = m || ""; if(m) setTimeout(()=>{ if($("#toast").textContent===m) $("#toast").textContent=""; }, 3000); }
+async function post(path, body){
+  const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({token, ...body})});
+  const j = await r.json(); if(j.error) toast(j.error); return j;
+}
+
+// ── 语音 ──
+function speak(text){
+  if(!voiceOn || !window.speechSynthesis) return;
+  const u = new SpeechSynthesisUtterance(text.replace(/[👍👎⚠☠💊🌂✒👼]/g,""));
+  u.lang = "zh-CN"; u.rate = 1.05;
+  speechSynthesis.speak(u);
+}
+function renderVoice(){ $("#voiceBtn").textContent = voiceOn ? "🔊 语音开" : "🔇 语音关"; }
+$("#voiceBtn").onclick = () => { voiceOn = !voiceOn; store.set("mafia_voice", voiceOn?"1":"0"); renderVoice(); if(voiceOn) speak("语音播报已开启"); else speechSynthesis?.cancel(); };
+renderVoice();
+
+// ── 计时 ──
+setInterval(() => {
+  if(deadline == null){ $("#timer").textContent = ""; return; }
+  const s = Math.max(0, Math.ceil((deadline - Date.now())/1000));
+  $("#timer").textContent = s + "s";
+}, 250);
+
+// ── 加入 / 大厅 ──
+function renderJoin(s){
+  layoutBuilt = null;
+  $("#phase").innerHTML = "";
+  $("#app").innerHTML = `<div class="center card stack">
+    <div><b style="color:var(--gold2);font-size:18px">加入游戏</b><div class="fac">10人局 · 程序担任法官</div></div>
+    ${s.started ? `<div class="err">游戏已经开始，无法加入。</div>` :
+      s.full ? `<div class="err">房间已满。</div>` : `
+      <div class="row"><input type="text" id="name" maxlength="12" placeholder="输入你的昵称"><button class="btn primary" id="joinBtn">加入</button></div>
+      <div class="fac">当前已有 ${s.count} / 10 人</div>`}
+  </div>`;
+  const go = async () => { const j = await post("/api/join", {name: $("#name").value}); if(j.token){ token = j.token; store.set("mafia_token", token); poll(true); } };
+  if($("#joinBtn")){ $("#joinBtn").onclick = go; $("#name").onkeydown = e => { if(e.key==="Enter") go(); }; $("#name").focus(); }
+}
+
+function renderLobby(s){
+  layoutBuilt = null;
+  $("#phase").innerHTML = `<b>等待玩家加入</b><div class="info">${s.seats.length} / 10 人 · 你是 ${s.me.num}号 ${esc(s.me.name)}</div>`;
+  const seats = Array.from({length:10}, (_,i) => {
+    const p = s.seats[i];
+    return `<div class="seat ${p && p.num===s.me.num ? "me":""}"><span class="n">${i+1}号</span>${p ? esc(p.name) + (p.host?" 👑":"") + (p.bot?" 🤖":"") : '<span class="fac">空位</span>'}</div>`;
+  }).join("");
+  const hostCtl = s.host ? `
+    <div class="stack" style="margin-top:16px">
+      <div class="row"><b style="color:var(--gold)">胜利条件</b>
+        <label><input type="radio" name="mode" value="edge" checked> 屠边</label>
+        <label><input type="radio" name="mode" value="city"> 屠城</label></div>
+      <label class="fac"><input type="checkbox" id="bots"> 用机器人补满空位（自己试玩/测试用）</label>
+      <button class="btn primary" id="startBtn">开始游戏</button>
+    </div>` : `<p class="fac" style="margin-top:16px">等待房主 👑 开始游戏…</p>`;
+  const keep = $("#bots")?.checked, keepMode = document.querySelector("input[name=mode]:checked")?.value;
+  $("#app").innerHTML = `<div class="center card" style="max-width:560px">
+      <h3>座位</h3><div class="seats">${seats}</div>${hostCtl}
+      <div style="margin-top:12px"><button class="btn" id="leaveBtn">离开座位</button></div>
+      <p class="fac" style="margin-top:12px">提示：建议大家同时开着语音通话（白天发言用），并点右上角开启语音播报。</p></div>`;
+  if($("#bots") && keep) $("#bots").checked = true;
+  if(keepMode) { const r = document.querySelector(`input[name=mode][value=${keepMode}]`); if(r) r.checked = true; }
+  if($("#startBtn")) $("#startBtn").onclick = () => post("/api/start", {mode: document.querySelector("input[name=mode]:checked").value, bots: $("#bots").checked}).then(()=>poll(true));
+  $("#leaveBtn").onclick = async () => { const j = await post("/api/leave", {}); if(j.ok){ token=""; store.del("mafia_token"); poll(true); } };
+}
+
+// ── 游戏 ──
+function buildGame(){
+  $("#app").innerHTML = `<main>
+    <div class="stack"><div class="card"><h3>座位 <span class="badge" id="mode"></span></h3><div class="seats" id="seats"></div></div>
+      <div id="extra"></div></div>
+    <div class="stack"><div class="card action" id="action"></div><div id="team"></div><div id="result"></div></div>
+    <div class="stack">
+      <div class="card"><h3>我的身份 <button class="btn" id="hideBtn" style="padding:2px 10px;font-size:12px;float:right"></button></h3><div id="role"></div></div>
+      <div class="card"><h3>我的私密信息</h3><div class="list" id="priv"></div></div>
+      <div class="card"><h3>法官播报</h3><div class="list" id="ann"></div></div>
+    </div></main>`;
+  $("#hideBtn").onclick = () => { roleHidden = !roleHidden; store.set("mafia_hide", roleHidden?"1":"0"); renderRole(window._s); };
+  layoutBuilt = "game"; reqKey = null; lastChatLen = -1;
+}
+
+function renderRole(s){
+  $("#hideBtn").textContent = roleHidden ? "显示" : "隐藏";
+  $("#role").innerHTML = `<div class="${roleHidden?"hidden-role":""}">
+    <div class="fac">${s.me.num}号 ${esc(s.me.name)} · ${esc(s.me.faction)}</div>
+    <div class="role">${esc(s.me.role)}</div>
+    <ul class="role-desc">${s.me.desc.map(d=>`<li>${esc(d)}</li>`).join("")}</ul></div>
+    ${s.me.out ? `<div class="err" style="margin-top:8px">你已出局</div>` : ""}`;
+}
+
+function renderAction(s){
+  const r = s.request;
+  const key = r ? r.id + "|" + JSON.stringify(r.answered) : "none|" + s.phase.title;
+  if(key === reqKey) return;
+  const newReq = !reqKey || reqKey.split("|")[0] !== (r ? r.id : "none");
+  reqKey = key;
+  if(newReq) multiSel = [];
+  if(!r){
+    const night = /夜/.test(s.phase.title) && !s.ended;
+    $("#action").innerHTML = `<div class="wait"><div class="moon">${s.ended ? "🎬" : night ? "🌙" : "☀️"}</div>
+      <div>${s.ended ? "游戏结束" : night ? "天黑请闭眼，等待法官叫到你的身份…" : esc(s.phase.info || "请听法官主持")}</div></div>`;
+    return;
+  }
+  const answered = r.answered != null;
+  const isSel = v => r.count > 1 ? multiSel.includes(v) : (Array.isArray(r.answered) ? r.answered.includes(v) : r.answered === v);
+  $("#action").innerHTML = `<div class="t">${esc(r.title)}</div><div class="x">${esc(r.text)}</div>
+    <div class="opts">${r.options.map(([v,l]) => `<button class="btn ${isSel(v)?"sel":""}" data-v="${esc(v)}" ${answered && !r.changeable ? "disabled":""}>${esc(l)}</button>`).join("")}</div>
+    ${r.count > 1 ? `<div style="margin-top:10px"><button class="btn primary" id="multiOk" ${answered?"disabled":""}>确认（已选 ${multiSel.length}/${r.count}）</button></div>` : ""}
+    ${answered ? `<div class="fac" style="margin-top:8px">✓ 已提交${r.changeable ? "（在其他人提交前仍可改选）" : "，等待其他玩家…"}</div>` : ""}`;
+  $("#action").querySelectorAll("button[data-v]").forEach(b => b.onclick = async () => {
+    const v = b.dataset.v;
+    if(r.count > 1){
+      if(multiSel.includes(v)) multiSel = multiSel.filter(x=>x!==v);
+      else if(multiSel.length < r.count) multiSel.push(v);
+      reqKey = null; renderAction(s); return;
+    }
+    await post("/api/act", {id: r.id, value: v}); poll(true);
+  });
+  if($("#multiOk")) $("#multiOk").onclick = async () => {
+    if(multiSel.length !== r.count) return toast(`请选择 ${r.count} 项`);
+    await post("/api/act", {id: r.id, value: multiSel}); poll(true);
+  };
+}
+
+function renderTeam(s){
+  if(!s.team){ $("#team").innerHTML = ""; lastChatLen = -1; return; }
+  if(!$("#teamCard")){
+    $("#team").innerHTML = `<div class="card team" id="teamCard"><h3>🔫 Bocchetti 家族（仅家族成员可见）</h3>
+      <div id="teamMembers"></div><div class="list" id="chat" style="margin-top:8px;max-height:180px"></div>
+      <div class="chatrow"><input type="text" id="chatIn" maxlength="100" placeholder="家族悄悄话…"><button class="btn" id="chatBtn">发送</button></div></div>`;
+    const send = async () => { const t = $("#chatIn").value.trim(); if(!t) return; $("#chatIn").value=""; await post("/api/chat", {text:t}); poll(true); };
+    $("#chatBtn").onclick = send; $("#chatIn").onkeydown = e => { if(e.key==="Enter") send(); };
+  }
+  $("#teamMembers").innerHTML = `<table>${s.team.members.map(m => `<tr><td>${m.num}号 ${esc(m.name)}</td><td>${esc(m.role)}</td><td>${m.pick == null ? '<span class="fac">未选</span>' : "→ " + esc(m.pick)}</td></tr>`).join("")}</table>`;
+  if(s.team.chat.length !== lastChatLen){
+    lastChatLen = s.team.chat.length;
+    $("#chat").innerHTML = s.team.chat.map(c => `<div><span class="t">${c.num}号</span>${esc(c.text)}</div>`).join("");
+    $("#chat").scrollTop = 1e9;
+  }
+}
+
+function renderExtra(s){
+  let h = "";
+  if(s.can_explode) h += `<div class="card team"><h3>第一代教父</h3><p class="fac">放逐公投前可自爆并带走一名玩家，立刻进入黑夜。</p><button class="btn danger" id="explodeBtn">💥 自爆</button></div>`;
+  if(s.can_report) h += `<div class="card"><h3>⚖ 举报违规</h3><p class="fac">若有玩家在公开发言中以“守护 Florence”作为金水发言，可举报。全体在场玩家表决，过半同意则判罚：若该玩家确为 Stevie 则当场出局，否则判罚无效。</p>
+    <div class="row"><select id="penSel" class="btn">${s.seats.filter(p=>!p.out).map(p=>`<option value="${p.num}">${p.num}号 ${esc(p.name)}</option>`).join("")}</select><button class="btn danger" id="penBtn">举报</button></div></div>`;
+  const sig = (s.can_explode?"e":"") + (s.can_report?"p":"");
+  if($("#extra").dataset.sig === sig) return;
+  $("#extra").dataset.sig = sig; $("#extra").innerHTML = h;
+  if($("#explodeBtn")) $("#explodeBtn").onclick = () => { if(confirm("确定自爆？")) post("/api/explode", {}).then(()=>poll(true)); };
+  if($("#penBtn")) $("#penBtn").onclick = () => { if(confirm("确定举报该玩家？")) post("/api/report", {target: +$("#penSel").value}).then(()=>poll(true)); };
+}
+
+function renderResult(s){
+  if(!s.ended || !s.result){ $("#result").innerHTML = ""; return; }
+  if($("#result").dataset.done) return;
+  $("#result").dataset.done = "1";
+  const R = s.result;
+  $("#result").innerHTML = `<div class="card"><div class="win">🏆 ${esc(R.winner)}</div>
+    ${R.achievement ? `<p style="text-align:center;color:var(--gold2)">💐 ${esc(R.achievement)}</p>` : ""}
+    <h3>身份公布</h3><table><tr><th>座位</th><th>玩家</th><th>身份</th><th>阵营</th><th>状态</th></tr>
+    ${R.roles.map(p => `<tr><td>${p.num}号</td><td>${esc(p.name)}</td><td>${esc(p.role)}</td><td>${esc(p.camp)}</td><td>${p.alive?"存活":"出局"}</td></tr>`).join("")}</table>
+    ${R.lovers ? `<p class="fac">罗密欧与朱丽叶：${R.lovers[0]}号 & ${R.lovers[1]}号</p>` : ""}
+    <h3 style="margin-top:12px">复盘记录</h3><div class="list" style="max-height:400px">${R.log.map(l=>`<div>${esc(l)}</div>`).join("")}</div>
+    ${s.host ? `<div style="margin-top:12px"><button class="btn primary" id="againBtn">回到大厅，再来一局</button></div>` : ""}</div>`;
+  if($("#againBtn")) $("#againBtn").onclick = () => post("/api/restart", {}).then(()=>poll(true));
+}
+
+function renderGame(s){
+  if(layoutBuilt !== "game") buildGame();
+  window._s = s;
+  $("#phase").innerHTML = `<b>${esc(s.phase.title)}</b><div class="info">${esc(s.phase.info)}</div>`;
+  deadline = s.phase.remaining == null ? null : Date.now() + s.phase.remaining*1000;
+  $("#mode").textContent = s.mode;
+  $("#seats").innerHTML = s.seats.map(p => `<div class="seat ${p.out?"out":""} ${p.num===s.me.num?"me":""} ${p.speaking?"speaking":""}">
+     <span class="n">${p.num}号</span>${esc(p.name)}${p.bot?" 🤖":""}
+     <span class="tag">${p.out ? "出局" : p.speaking ? "🎤 发言中" : "在场"}${p.muted ? ' · <span class="muted-tag">🤐 禁言</span>' : ""}</span></div>`).join("");
+  renderRole(s); renderAction(s); renderTeam(s); renderExtra(s); renderResult(s);
+  $("#priv").innerHTML = s.privates.length ? s.privates.map(p => `<div><span class="t">${esc(p.t)}</span>${esc(p.text)}</div>`).join("") : '<span class="fac">暂无</span>';
+  $("#ann").innerHTML = s.announcements.slice().reverse().map(a => `<div>${esc(a.text)}</div>`).join("");
+  if(lastAnn === null) lastAnn = s.announcements.length - 1;
+  for(const a of s.announcements) if(a.id > lastAnn){ speak(a.text); lastAnn = a.id; }
+}
+
+// ── 轮询 ──
+let timer = null, busy = false;
+async function poll(now){
+  if(busy) return; busy = true; clearTimeout(timer);
+  try{
+    const s = await (await fetch("/api/state?token=" + encodeURIComponent(token))).json();
+    if(!s.joined) renderJoin(s);
+    else if(!s.started){ lastAnn = null; deadline = null; renderLobby(s); }
+    else renderGame(s);
+  }catch(e){ $("#phase").innerHTML = `<b>连接中断</b><div class="info">正在重连…</div>`; }
+  busy = false; timer = setTimeout(poll, 800);
+}
+poll();
+</script>
+</body>
+</html>
